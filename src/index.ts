@@ -495,7 +495,11 @@ function render() {
   compositionPass.update({
     colorBuffer: visualization,
     mode: configuration.Mode,
-    gradient: gradientTextures[0]
+    gradient: gradientTextures[0],
+    obstacleEnabled: configuration.ObstacleEnabled,
+    obstaclePos: obstaclePosition,
+    obstacleSize: configuration.ObstacleSize,
+    aspect
   });
   renderer.render(compositionPass.scene, camera);
 }

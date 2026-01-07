@@ -5,7 +5,8 @@ import {
   RawShaderMaterial,
   Scene,
   Texture,
-  Uniform
+  Uniform,
+  Vector2
 } from "three";
 
 export class CompositionPass {
@@ -28,7 +29,11 @@ export class CompositionPass {
     this.material = new RawShaderMaterial({
       uniforms: {
         colorBuffer: new Uniform(Texture.DEFAULT_IMAGE),
-        gradient: new Uniform(Texture.DEFAULT_IMAGE)
+        gradient: new Uniform(Texture.DEFAULT_IMAGE),
+        obstacleEnabled: new Uniform(false),
+        obstaclePos: new Uniform(new Vector2(0.5, 0.5)),
+        obstacleSize: new Uniform(0.1),
+        aspect: new Uniform(new Vector2(1.0, 1.0))
       },
       defines: {
         MODE: 0
@@ -36,7 +41,7 @@ export class CompositionPass {
       vertexShader: `
           attribute vec2 position;
           varying vec2 vUV;
-          
+
           void main() {
             vUV = position * 0.5 + 0.5;
             gl_Position = vec4(position, 0.0, 1.0);
@@ -48,6 +53,10 @@ export class CompositionPass {
           varying vec2 vUV;
           uniform sampler2D colorBuffer;
           uniform sampler2D gradient;
+          uniform bool obstacleEnabled;
+          uniform vec2 obstaclePos;
+          uniform float obstacleSize;
+          uniform vec2 aspect;
 
           const vec3 W = vec3(0.2125, 0.7154, 0.0721);
           float luminance(in vec3 color) {
@@ -75,15 +84,45 @@ export class CompositionPass {
           void main() {
             vec4 color = texture2D(colorBuffer, vUV);
             float lum = luminance(abs(color.rgb));
+
+            vec4 finalColor;
             #if MODE == 0
-            gl_FragColor = color;
+            finalColor = color;
             #elif MODE == 1
-            gl_FragColor = vec4(lum);
+            finalColor = vec4(lum);
             #elif MODE == 2
-            gl_FragColor = spectral(mix(340.0, 700.0, lum));
+            finalColor = spectral(mix(340.0, 700.0, lum));
             #elif MODE == 3
-            gl_FragColor = texture2D(gradient, vec2(lum, 0.0));
+            finalColor = texture2D(gradient, vec2(lum, 0.0));
             #endif
+
+            // Draw obstacle overlay
+            if (obstacleEnabled) {
+              vec2 scaledUV = vec2(vUV.x * aspect.x, vUV.y);
+              vec2 scaledObsPos = vec2(obstaclePos.x * aspect.x, obstaclePos.y);
+              float halfSize = obstacleSize * 0.5;
+
+              // Check if inside obstacle
+              vec2 d = abs(scaledUV - scaledObsPos);
+              float inside = step(d.x, halfSize) * step(d.y, halfSize);
+
+              // Check if on border (within 2% of size from edge)
+              float borderWidth = obstacleSize * 0.08;
+              float onBorderX = step(halfSize - borderWidth, d.x) * step(d.x, halfSize);
+              float onBorderY = step(halfSize - borderWidth, d.y) * step(d.y, halfSize);
+              float onBorder = clamp(onBorderX + onBorderY, 0.0, 1.0) * inside;
+
+              // Obstacle fill color (dark gray) and border color (white)
+              vec3 fillColor = vec3(0.15);
+              vec3 borderColor = vec3(0.9);
+
+              // Apply obstacle colors
+              float fillMask = inside * (1.0 - onBorder);
+              finalColor.rgb = mix(finalColor.rgb, fillColor, fillMask * 0.9);
+              finalColor.rgb = mix(finalColor.rgb, borderColor, onBorder);
+            }
+
+            gl_FragColor = finalColor;
           }`,
       depthTest: false,
       depthWrite: false,
@@ -120,6 +159,18 @@ export class CompositionPass {
     }
     if (uniforms.gradient !== undefined) {
       this.material.uniforms.gradient.value = uniforms.gradient;
+    }
+    if (uniforms.obstacleEnabled !== undefined) {
+      this.material.uniforms.obstacleEnabled.value = uniforms.obstacleEnabled;
+    }
+    if (uniforms.obstaclePos !== undefined) {
+      this.material.uniforms.obstaclePos.value = uniforms.obstaclePos;
+    }
+    if (uniforms.obstacleSize !== undefined) {
+      this.material.uniforms.obstacleSize.value = uniforms.obstacleSize;
+    }
+    if (uniforms.aspect !== undefined) {
+      this.material.uniforms.aspect.value = uniforms.aspect;
     }
   }
 }
