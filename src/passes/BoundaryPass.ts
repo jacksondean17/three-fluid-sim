@@ -30,9 +30,15 @@ export class BoundaryPass {
       uniforms: {
         velocity: new Uniform(Texture.DEFAULT_IMAGE),
         flowEnabled: new Uniform(false),
-        obstacleEnabled: new Uniform(false),
-        obstaclePos: new Uniform(new Vector2(0.5, 0.5)),
-        obstacleSize: new Uniform(0.1),
+        chevronEnabled: new Uniform(false),
+        chevronColumns: new Uniform(3),
+        chevronRows: new Uniform(4),
+        chevronLength: new Uniform(0.15),
+        chevronWidth: new Uniform(0.025),
+        chevronAngle: new Uniform(45.0),
+        chevronGap: new Uniform(0.0),
+        chevronSpacingX: new Uniform(0.25),
+        chevronSpacingY: new Uniform(0.15),
         aspect: new Uniform(new Vector2(1.0, 1.0))
       },
       vertexShader: `
@@ -49,10 +55,41 @@ export class BoundaryPass {
         varying vec2 vUV;
         uniform sampler2D velocity;
         uniform bool flowEnabled;
-        uniform bool obstacleEnabled;
-        uniform vec2 obstaclePos;
-        uniform float obstacleSize;
+        uniform bool chevronEnabled;
+        uniform int chevronColumns;
+        uniform int chevronRows;
+        uniform float chevronLength;
+        uniform float chevronWidth;
+        uniform float chevronAngle;
+        uniform float chevronGap;
+        uniform float chevronSpacingX;
+        uniform float chevronSpacingY;
         uniform vec2 aspect;
+
+        // Check if point is inside a rotated rectangle
+        float insideRotatedRect(vec2 p, vec2 center, float length, float width, float angleDeg) {
+          float angleRad = angleDeg * 3.14159265 / 180.0;
+          float cosA = cos(-angleRad);
+          float sinA = sin(-angleRad);
+
+          // Translate to rectangle's local space
+          vec2 local = p - center;
+
+          // Rotate to align with rectangle axes
+          vec2 rotated = vec2(
+            local.x * cosA - local.y * sinA,
+            local.x * sinA + local.y * cosA
+          );
+
+          // Check if inside rectangle (length along x, width along y)
+          float halfLength = length * 0.5;
+          float halfWidth = width * 0.5;
+
+          if (abs(rotated.x) <= halfLength && abs(rotated.y) <= halfWidth) {
+            return 1.0;
+          }
+          return 0.0;
+        }
 
         void main() {
           vec2 texelSize = vec2(dFdx(vUV.x), dFdy(vUV.y));
@@ -70,26 +107,44 @@ export class BoundaryPass {
             edgeMask = clamp(leftEdgeMask + bottomEdgeMask + rightEdgeMask + topEdgeMask, 0.0, 1.0);
           }
 
-          // Obstacle boundary check
-          float obstacleMask = 0.0;
-          if (obstacleEnabled) {
-            // Scale UV to aspect ratio for proper square shape
+          // Chevron pattern check
+          float chevronMask = 0.0;
+          if (chevronEnabled) {
+            // Scale UV to aspect ratio
             vec2 scaledUV = vec2(vUV.x * aspect.x, vUV.y);
-            vec2 scaledObsPos = vec2(obstaclePos.x * aspect.x, obstaclePos.y);
-            float halfSize = obstacleSize * 0.5;
 
-            // Check if inside obstacle (using box distance)
-            vec2 d = abs(scaledUV - scaledObsPos) - vec2(halfSize);
-            float inside = step(max(d.x, d.y), 0.0);
+            // Calculate pattern dimensions
+            float totalWidth = float(chevronColumns) * chevronSpacingX;
+            float totalHeight = float(chevronRows) * chevronSpacingY;
 
-            // Check if at obstacle edge (within one texel of boundary)
-            vec2 edgeDist = abs(scaledUV - scaledObsPos) - vec2(halfSize);
-            float atEdge = step(max(edgeDist.x, edgeDist.y), texelSize.x * 2.0) * inside;
+            // Center the pattern
+            float startX = (aspect.x - totalWidth) * 0.5 + chevronSpacingX * 0.5;
+            float startY = (1.0 - totalHeight) * 0.5 + chevronSpacingY * 0.5;
 
-            obstacleMask = inside;
+            // Check each chevron rectangle (each column is a single rectangle)
+            for (int row = 0; row < 20; row++) {
+              if (row >= chevronRows) break;
+              for (int col = 0; col < 20; col++) {
+                if (col >= chevronColumns) break;
+
+                // Center of this rectangle
+                float cx = startX + float(col) * chevronSpacingX;
+                float cy = startY + float(row) * chevronSpacingY;
+
+                // Alternate angle direction based on column (even = positive, odd = negative)
+                float angle = (mod(float(col), 2.0) < 0.5) ? chevronAngle : -chevronAngle;
+
+                // Apply gap offset (moves pairs apart horizontally)
+                float gapOffset = chevronGap * 0.5 * ((mod(float(col), 2.0) < 0.5) ? -1.0 : 1.0);
+                cx += gapOffset;
+
+                chevronMask += insideRotatedRect(scaledUV, vec2(cx, cy), chevronLength, chevronWidth, angle);
+              }
+            }
+            chevronMask = clamp(chevronMask, 0.0, 1.0);
           }
 
-          float mask = clamp(edgeMask + obstacleMask, 0.0, 1.0);
+          float mask = clamp(edgeMask + chevronMask, 0.0, 1.0);
           float direction = mix(1.0, -1.0, mask);
 
           gl_FragColor = texture2D(velocity, vUV) * direction;
@@ -110,14 +165,32 @@ export class BoundaryPass {
     if (uniforms.flowEnabled !== undefined) {
       this.material.uniforms.flowEnabled.value = uniforms.flowEnabled;
     }
-    if (uniforms.obstacleEnabled !== undefined) {
-      this.material.uniforms.obstacleEnabled.value = uniforms.obstacleEnabled;
+    if (uniforms.chevronEnabled !== undefined) {
+      this.material.uniforms.chevronEnabled.value = uniforms.chevronEnabled;
     }
-    if (uniforms.obstaclePos !== undefined) {
-      this.material.uniforms.obstaclePos.value = uniforms.obstaclePos;
+    if (uniforms.chevronColumns !== undefined) {
+      this.material.uniforms.chevronColumns.value = uniforms.chevronColumns;
     }
-    if (uniforms.obstacleSize !== undefined) {
-      this.material.uniforms.obstacleSize.value = uniforms.obstacleSize;
+    if (uniforms.chevronRows !== undefined) {
+      this.material.uniforms.chevronRows.value = uniforms.chevronRows;
+    }
+    if (uniforms.chevronLength !== undefined) {
+      this.material.uniforms.chevronLength.value = uniforms.chevronLength;
+    }
+    if (uniforms.chevronWidth !== undefined) {
+      this.material.uniforms.chevronWidth.value = uniforms.chevronWidth;
+    }
+    if (uniforms.chevronAngle !== undefined) {
+      this.material.uniforms.chevronAngle.value = uniforms.chevronAngle;
+    }
+    if (uniforms.chevronGap !== undefined) {
+      this.material.uniforms.chevronGap.value = uniforms.chevronGap;
+    }
+    if (uniforms.chevronSpacingX !== undefined) {
+      this.material.uniforms.chevronSpacingX.value = uniforms.chevronSpacingX;
+    }
+    if (uniforms.chevronSpacingY !== undefined) {
+      this.material.uniforms.chevronSpacingY.value = uniforms.chevronSpacingY;
     }
     if (uniforms.aspect !== undefined) {
       this.material.uniforms.aspect.value = uniforms.aspect;

@@ -30,9 +30,15 @@ export class CompositionPass {
       uniforms: {
         colorBuffer: new Uniform(Texture.DEFAULT_IMAGE),
         gradient: new Uniform(Texture.DEFAULT_IMAGE),
-        obstacleEnabled: new Uniform(false),
-        obstaclePos: new Uniform(new Vector2(0.5, 0.5)),
-        obstacleSize: new Uniform(0.1),
+        chevronEnabled: new Uniform(false),
+        chevronColumns: new Uniform(3),
+        chevronRows: new Uniform(4),
+        chevronLength: new Uniform(0.15),
+        chevronWidth: new Uniform(0.025),
+        chevronAngle: new Uniform(45.0),
+        chevronGap: new Uniform(0.0),
+        chevronSpacingX: new Uniform(0.25),
+        chevronSpacingY: new Uniform(0.15),
         aspect: new Uniform(new Vector2(1.0, 1.0))
       },
       defines: {
@@ -53,9 +59,15 @@ export class CompositionPass {
           varying vec2 vUV;
           uniform sampler2D colorBuffer;
           uniform sampler2D gradient;
-          uniform bool obstacleEnabled;
-          uniform vec2 obstaclePos;
-          uniform float obstacleSize;
+          uniform bool chevronEnabled;
+          uniform int chevronColumns;
+          uniform int chevronRows;
+          uniform float chevronLength;
+          uniform float chevronWidth;
+          uniform float chevronAngle;
+          uniform float chevronGap;
+          uniform float chevronSpacingX;
+          uniform float chevronSpacingY;
           uniform vec2 aspect;
 
           const vec3 W = vec3(0.2125, 0.7154, 0.0721);
@@ -81,6 +93,26 @@ export class CompositionPass {
             return vec4(r, g, b, 1.0);
           }
 
+          // Signed distance to a rotated rectangle (negative inside, positive outside)
+          float sdRotatedRect(vec2 p, vec2 center, float rectLen, float rectWidth, float angleDeg) {
+            float angleRad = angleDeg * 3.14159265 / 180.0;
+            float cosA = cos(-angleRad);
+            float sinA = sin(-angleRad);
+
+            // Translate to rectangle's local space
+            vec2 local = p - center;
+
+            // Rotate to align with rectangle axes
+            vec2 rotated = vec2(
+              local.x * cosA - local.y * sinA,
+              local.x * sinA + local.y * cosA
+            );
+
+            // Signed distance to box
+            vec2 d = abs(rotated) - vec2(rectLen * 0.5, rectWidth * 0.5);
+            return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+          }
+
           void main() {
             vec4 color = texture2D(colorBuffer, vUV);
             float lum = luminance(abs(color.rgb));
@@ -96,29 +128,54 @@ export class CompositionPass {
             finalColor = texture2D(gradient, vec2(lum, 0.0));
             #endif
 
-            // Draw obstacle overlay
-            if (obstacleEnabled) {
+            // Draw chevron pattern overlay
+            if (chevronEnabled) {
               vec2 scaledUV = vec2(vUV.x * aspect.x, vUV.y);
-              vec2 scaledObsPos = vec2(obstaclePos.x * aspect.x, obstaclePos.y);
-              float halfSize = obstacleSize * 0.5;
 
-              // Check if inside obstacle
-              vec2 d = abs(scaledUV - scaledObsPos);
-              float inside = step(d.x, halfSize) * step(d.y, halfSize);
+              // Calculate pattern dimensions
+              float totalWidth = float(chevronColumns) * chevronSpacingX;
+              float totalHeight = float(chevronRows) * chevronSpacingY;
 
-              // Check if on border (within 2% of size from edge)
-              float borderWidth = obstacleSize * 0.08;
-              float onBorderX = step(halfSize - borderWidth, d.x) * step(d.x, halfSize);
-              float onBorderY = step(halfSize - borderWidth, d.y) * step(d.y, halfSize);
-              float onBorder = clamp(onBorderX + onBorderY, 0.0, 1.0) * inside;
+              // Center the pattern
+              float startX = (aspect.x - totalWidth) * 0.5 + chevronSpacingX * 0.5;
+              float startY = (1.0 - totalHeight) * 0.5 + chevronSpacingY * 0.5;
+
+              float minDist = 1000.0;
+
+              // Check each chevron rectangle (each column is a single rectangle)
+              for (int row = 0; row < 20; row++) {
+                if (row >= chevronRows) break;
+                for (int col = 0; col < 20; col++) {
+                  if (col >= chevronColumns) break;
+
+                  // Center of this rectangle
+                  float cx = startX + float(col) * chevronSpacingX;
+                  float cy = startY + float(row) * chevronSpacingY;
+
+                  // Alternate angle direction based on column (even = positive, odd = negative)
+                  float angle = (mod(float(col), 2.0) < 0.5) ? chevronAngle : -chevronAngle;
+
+                  // Apply gap offset (moves pairs apart horizontally)
+                  float gapOffset = chevronGap * 0.5 * ((mod(float(col), 2.0) < 0.5) ? -1.0 : 1.0);
+                  cx += gapOffset;
+
+                  float d = sdRotatedRect(scaledUV, vec2(cx, cy), chevronLength, chevronWidth, angle);
+                  minDist = min(minDist, d);
+                }
+              }
+
+              // Draw fill and border based on distance
+              float borderWidth = chevronWidth * 0.15;
+              float inside = 1.0 - smoothstep(-0.001, 0.001, minDist);
+              float onBorder = (1.0 - smoothstep(-borderWidth, -borderWidth + 0.002, minDist)) * inside;
 
               // Obstacle fill color (dark gray) and border color (white)
-              vec3 fillColor = vec3(0.15);
-              vec3 borderColor = vec3(0.9);
+              vec3 fillColor = vec3(0.2);
+              vec3 borderColor = vec3(0.85);
 
-              // Apply obstacle colors
+              // Apply chevron colors
               float fillMask = inside * (1.0 - onBorder);
-              finalColor.rgb = mix(finalColor.rgb, fillColor, fillMask * 0.9);
+              finalColor.rgb = mix(finalColor.rgb, fillColor, fillMask * 0.92);
               finalColor.rgb = mix(finalColor.rgb, borderColor, onBorder);
             }
 
@@ -160,14 +217,32 @@ export class CompositionPass {
     if (uniforms.gradient !== undefined) {
       this.material.uniforms.gradient.value = uniforms.gradient;
     }
-    if (uniforms.obstacleEnabled !== undefined) {
-      this.material.uniforms.obstacleEnabled.value = uniforms.obstacleEnabled;
+    if (uniforms.chevronEnabled !== undefined) {
+      this.material.uniforms.chevronEnabled.value = uniforms.chevronEnabled;
     }
-    if (uniforms.obstaclePos !== undefined) {
-      this.material.uniforms.obstaclePos.value = uniforms.obstaclePos;
+    if (uniforms.chevronColumns !== undefined) {
+      this.material.uniforms.chevronColumns.value = uniforms.chevronColumns;
     }
-    if (uniforms.obstacleSize !== undefined) {
-      this.material.uniforms.obstacleSize.value = uniforms.obstacleSize;
+    if (uniforms.chevronRows !== undefined) {
+      this.material.uniforms.chevronRows.value = uniforms.chevronRows;
+    }
+    if (uniforms.chevronLength !== undefined) {
+      this.material.uniforms.chevronLength.value = uniforms.chevronLength;
+    }
+    if (uniforms.chevronWidth !== undefined) {
+      this.material.uniforms.chevronWidth.value = uniforms.chevronWidth;
+    }
+    if (uniforms.chevronAngle !== undefined) {
+      this.material.uniforms.chevronAngle.value = uniforms.chevronAngle;
+    }
+    if (uniforms.chevronGap !== undefined) {
+      this.material.uniforms.chevronGap.value = uniforms.chevronGap;
+    }
+    if (uniforms.chevronSpacingX !== undefined) {
+      this.material.uniforms.chevronSpacingX.value = uniforms.chevronSpacingX;
+    }
+    if (uniforms.chevronSpacingY !== undefined) {
+      this.material.uniforms.chevronSpacingY.value = uniforms.chevronSpacingY;
     }
     if (uniforms.aspect !== undefined) {
       this.material.uniforms.aspect.value = uniforms.aspect;

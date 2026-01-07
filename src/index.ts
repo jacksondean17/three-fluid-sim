@@ -65,8 +65,15 @@ const configuration = {
   AddColor: true,
   FlowEnabled: false,
   FlowVelocity: 0.5,
-  ObstacleEnabled: true,
-  ObstacleSize: 0.1,
+  ChevronEnabled: true,
+  ChevronColumns: 6,
+  ChevronRows: 4,
+  ChevronLength: 0.15,
+  ChevronWidth: 0.025,
+  ChevronAngle: 45,
+  ChevronGap: 0.0,
+  ChevronSpacingX: 0.25,
+  ChevronSpacingY: 0.15,
   Visualize: "Color",
   Mode: "Spectral",
   Timestep: "1/60",
@@ -200,48 +207,20 @@ interface ITouchInput {
 
 let inputTouches: ITouchInput[] = [];
 
-// Obstacle state
-const obstaclePosition = new Vector2(0.5, 0.5); // Center of screen (normalized)
-let draggingObstacle = false;
-
-// Check if a point (in aspect-scaled coords) is inside the obstacle
-function isInsideObstacle(x: number, y: number): boolean {
-  if (!configuration.ObstacleEnabled) return false;
-  const halfSize = configuration.ObstacleSize * 0.5;
-  const obsX = obstaclePosition.x * aspect.x;
-  const obsY = obstaclePosition.y;
-  return (
-    x >= obsX - halfSize &&
-    x <= obsX + halfSize &&
-    y >= obsY - halfSize &&
-    y <= obsY + halfSize
-  );
-}
-
 canvas.addEventListener("mousedown", (event: MouseEvent) => {
   if (event.button === 0) {
     const x = (event.clientX / canvas.clientWidth) * aspect.x;
     const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
-
-    // Check if clicking on obstacle
-    if (isInsideObstacle(x, y)) {
-      draggingObstacle = true;
-    } else {
-      inputTouches.push({
-        id: "mouse",
-        input: new Vector4(x, y, 0, 0)
-      });
-    }
+    inputTouches.push({
+      id: "mouse",
+      input: new Vector4(x, y, 0, 0)
+    });
   }
 });
 canvas.addEventListener("mousemove", (event: MouseEvent) => {
-  const x = (event.clientX / canvas.clientWidth) * aspect.x;
-  const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
-
-  if (draggingObstacle) {
-    // Update obstacle position (convert back to normalized coords)
-    obstaclePosition.set(x / aspect.x, y);
-  } else if (inputTouches.length > 0) {
+  if (inputTouches.length > 0) {
+    const x = (event.clientX / canvas.clientWidth) * aspect.x;
+    const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
     inputTouches[0].input
       .setZ(x - inputTouches[0].input.x)
       .setW(y - inputTouches[0].input.y);
@@ -250,11 +229,7 @@ canvas.addEventListener("mousemove", (event: MouseEvent) => {
 });
 canvas.addEventListener("mouseup", (event: MouseEvent) => {
   if (event.button === 0) {
-    if (draggingObstacle) {
-      draggingObstacle = false;
-    } else {
-      inputTouches.pop();
-    }
+    inputTouches.pop();
   }
 });
 
@@ -392,9 +367,16 @@ function initGUI() {
   flow.add(configuration, "FlowEnabled");
   flow.add(configuration, "FlowVelocity", 0.0, 2.0, 0.1);
 
-  const obstacle = gui.addFolder("Obstacle");
-  obstacle.add(configuration, "ObstacleEnabled");
-  obstacle.add(configuration, "ObstacleSize", 0.05, 0.3, 0.01);
+  const chevron = gui.addFolder("Chevron");
+  chevron.add(configuration, "ChevronEnabled");
+  chevron.add(configuration, "ChevronColumns", 1, 10, 1);
+  chevron.add(configuration, "ChevronRows", 1, 10, 1);
+  chevron.add(configuration, "ChevronLength", 0.05, 0.4, 0.01);
+  chevron.add(configuration, "ChevronWidth", 0.01, 0.1, 0.005);
+  chevron.add(configuration, "ChevronAngle", 15, 75, 1);
+  chevron.add(configuration, "ChevronGap", 0.0, 0.15, 0.005);
+  chevron.add(configuration, "ChevronSpacingX", 0.1, 0.5, 0.01);
+  chevron.add(configuration, "ChevronSpacingY", 0.05, 0.3, 0.01);
 
   gui.add(configuration, "Visualize", [
     "Color",
@@ -463,14 +445,20 @@ function render() {
       renderer.render(flowSourcePass.scene, camera);
     }
 
-    // Add velocity boundaries (simulation walls and obstacles).
-    if (configuration.Boundaries || configuration.ObstacleEnabled) {
+    // Add velocity boundaries (simulation walls and chevron obstacles).
+    if (configuration.Boundaries || configuration.ChevronEnabled) {
       velocityBoundary.update({
         velocity: v,
         flowEnabled: configuration.FlowEnabled,
-        obstacleEnabled: configuration.ObstacleEnabled,
-        obstaclePos: obstaclePosition,
-        obstacleSize: configuration.ObstacleSize,
+        chevronEnabled: configuration.ChevronEnabled,
+        chevronColumns: configuration.ChevronColumns,
+        chevronRows: configuration.ChevronRows,
+        chevronLength: configuration.ChevronLength,
+        chevronWidth: configuration.ChevronWidth,
+        chevronAngle: configuration.ChevronAngle,
+        chevronGap: configuration.ChevronGap,
+        chevronSpacingX: configuration.ChevronSpacingX,
+        chevronSpacingY: configuration.ChevronSpacingY,
         aspect
       });
       v = velocityRT.set(renderer);
@@ -545,9 +533,15 @@ function render() {
     colorBuffer: visualization,
     mode: configuration.Mode,
     gradient: gradientTextures[0],
-    obstacleEnabled: configuration.ObstacleEnabled,
-    obstaclePos: obstaclePosition,
-    obstacleSize: configuration.ObstacleSize,
+    chevronEnabled: configuration.ChevronEnabled,
+    chevronColumns: configuration.ChevronColumns,
+    chevronRows: configuration.ChevronRows,
+    chevronLength: configuration.ChevronLength,
+    chevronWidth: configuration.ChevronWidth,
+    chevronAngle: configuration.ChevronAngle,
+    chevronGap: configuration.ChevronGap,
+    chevronSpacingX: configuration.ChevronSpacingX,
+    chevronSpacingY: configuration.ChevronSpacingY,
     aspect
   });
   renderer.render(compositionPass.scene, camera);
