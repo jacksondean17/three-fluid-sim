@@ -52,4 +52,10 @@ export class RenderTarget {
     this.index %= this.nBuffers;
     return buffer.target.texture;
   }
+
+  // Get the previous render target (the one that was last written to)
+  public get previous(): WebGLRenderTarget {
+    const prevIndex = (this.index - 1 + this.nBuffers) % this.nBuffers;
+    return this.buffers[prevIndex].target;
+  }
 }

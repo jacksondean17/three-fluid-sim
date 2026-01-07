@@ -1,6 +1,7 @@
 import {
   HalfFloatType,
   OrthographicCamera,
+  RGBAFormat,
   RGBFormat,
   Texture,
   TextureLoader,
@@ -99,6 +100,29 @@ const configuration = {
   }
 };
 
+// Measurement system
+interface IMeasurement {
+  type: "line" | "point";
+  x: number;  // x position (0-1 in aspect-corrected space)
+  y: number;  // y position (0-1), only used for point measurements
+  enabled: boolean;
+  pressure: number;
+  velocityX: number;
+  velocityY: number;
+  velocityMag: number;
+}
+
+const measurements: IMeasurement[] = [];
+const MAX_MEASUREMENTS = 8;
+
+const measurementConfig = {
+  showOverlay: true
+};
+
+// Initialize with a couple of default measurements
+measurements.push({ type: "line", x: 0.3, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+measurements.push({ type: "line", x: 0.7, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+
 // Html/Three.js initialization.
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const stats = new Stats();
@@ -135,9 +159,10 @@ const resolution = new Vector2(
 const aspect = new Vector2(resolution.x / resolution.y, 1.0);
 
 // RenderTargets initialization.
-const velocityRT = new RenderTarget(resolution, 2, RGBFormat, HalfFloatType);
+// Use RGBAFormat for velocity and pressure to enable readRenderTargetPixels for measurements
+const velocityRT = new RenderTarget(resolution, 2, RGBAFormat, HalfFloatType);
 const divergenceRT = new RenderTarget(resolution, 1, RGBFormat, HalfFloatType);
-const pressureRT = new RenderTarget(resolution, 2, RGBFormat, HalfFloatType);
+const pressureRT = new RenderTarget(resolution, 2, RGBAFormat, HalfFloatType);
 const colorRT = new RenderTarget(resolution, 2, RGBFormat, UnsignedByteType);
 
 // These variables are used to store the result the result of the different
@@ -395,6 +420,63 @@ function initGUI() {
   gui.add(configuration, "SpectralMin", 340, 600, 10);
   gui.add(configuration, "SpectralMax", 450, 700, 10);
 
+  // Measurement controls
+  const measureFolder = gui.addFolder("Measurements");
+  const measurementFolders: any[] = [];
+
+  const measurementActions = {
+    addLine: () => {
+      if (measurements.length < MAX_MEASUREMENTS) {
+        measurements.push({ type: "line", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+        rebuildMeasurementGUI();
+      }
+    },
+    addPoint: () => {
+      if (measurements.length < MAX_MEASUREMENTS) {
+        measurements.push({ type: "point", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+        rebuildMeasurementGUI();
+      }
+    }
+  };
+
+  measureFolder.add(measurementConfig, "showOverlay").name("Show Overlay");
+  measureFolder.add(measurementActions, "addLine").name("Add Line");
+  measureFolder.add(measurementActions, "addPoint").name("Add Point");
+
+  function rebuildMeasurementGUI() {
+    // Remove old measurement folders
+    for (const folder of measurementFolders) {
+      measureFolder.removeFolder(folder);
+    }
+    measurementFolders.length = 0;
+
+    // Create new folders for each measurement
+    for (let i = 0; i < measurements.length; i++) {
+      const m = measurements[i];
+      const name = m.type === "line" ? `Line ${i + 1}` : `Point ${i + 1}`;
+      const folder = measureFolder.addFolder(name);
+      measurementFolders.push(folder);
+
+      folder.add(m, "enabled").name("Enabled");
+      folder.add(m, "x", 0, 2.0, 0.01).name("X Position");
+      if (m.type === "point") {
+        folder.add(m, "y", 0, 1, 0.01).name("Y Position");
+      }
+      folder.add(m, "pressure").name("Pressure").listen();
+      folder.add(m, "velocityMag").name("Velocity").listen();
+
+      const removeConfig = {
+        remove: () => {
+          measurements.splice(i, 1);
+          rebuildMeasurementGUI();
+        }
+      };
+      folder.add(removeConfig, "remove").name("Remove");
+    }
+  }
+
+  rebuildMeasurementGUI();
+
   const github = gui.add(configuration, "Github");
   github.__li.className = "guiIconText";
   github.__li.style.borderLeft = "3px solid #8C8C8C";
@@ -551,7 +633,166 @@ function render() {
     aspect
   });
   renderer.render(compositionPass.scene, camera);
+
+  // Update measurements
+  updateMeasurements();
+
+  // Draw measurement overlay
+  if (measurementConfig.showOverlay) {
+    drawMeasurementOverlay();
+  }
 }
+
+// Create overlay canvas for measurements
+const overlayCanvas = document.createElement("canvas");
+overlayCanvas.style.position = "absolute";
+overlayCanvas.style.top = "0";
+overlayCanvas.style.left = "0";
+overlayCanvas.style.pointerEvents = "none";
+overlayCanvas.width = window.innerWidth;
+overlayCanvas.height = window.innerHeight;
+canvas.parentElement.appendChild(overlayCanvas);
+const overlayCtx = overlayCanvas.getContext("2d");
+
+// Resize overlay canvas with window
+window.addEventListener("resize", () => {
+  overlayCanvas.width = window.innerWidth;
+  overlayCanvas.height = window.innerHeight;
+});
+
+// Buffer for reading texture pixels
+const pixelBuffer = new Float32Array(4);
+
+function sampleTexture(rt: RenderTarget, x: number, y: number): { r: number; g: number; b: number } {
+  // Clamp normalized coordinates to valid range
+  const clampedX = Math.max(0, Math.min(1, x));
+  const clampedY = Math.max(0, Math.min(1, y));
+
+  // Convert normalized coordinates to texture pixel coordinates
+  const texX = Math.floor(clampedX * (resolution.x - 1));
+  const texY = Math.floor(clampedY * (resolution.y - 1));
+
+  // Read single pixel from render target (use previous which contains the last rendered result)
+  renderer.readRenderTargetPixels(rt.previous, texX, texY, 1, 1, pixelBuffer);
+
+  return { r: pixelBuffer[0], g: pixelBuffer[1], b: pixelBuffer[2] };
+}
+
+function updateMeasurements() {
+  if (!p || !v) return;
+
+  for (const m of measurements) {
+    if (!m.enabled) continue;
+
+    // Convert x from aspect-corrected space to normalized 0-1
+    const normalizedX = m.x / aspect.x;
+
+    if (m.type === "line") {
+      // Sample multiple points along the vertical line and average
+      const numSamples = 32;
+      let pressureSum = 0;
+      let velXSum = 0;
+      let velYSum = 0;
+
+      for (let i = 0; i < numSamples; i++) {
+        const y = (i + 0.5) / numSamples;
+
+        const pSample = sampleTexture(pressureRT, normalizedX, y);
+        const vSample = sampleTexture(velocityRT, normalizedX, y);
+
+        pressureSum += pSample.r;
+        velXSum += vSample.r;
+        velYSum += vSample.g;
+      }
+
+      m.pressure = Math.round((pressureSum / numSamples) * 1000) / 1000;
+      m.velocityX = Math.round((velXSum / numSamples) * 1000) / 1000;
+      m.velocityY = Math.round((velYSum / numSamples) * 1000) / 1000;
+      m.velocityMag = Math.round(Math.sqrt(m.velocityX * m.velocityX + m.velocityY * m.velocityY) * 1000) / 1000;
+    } else {
+      // Point measurement - single sample
+      const pSample = sampleTexture(pressureRT, normalizedX, m.y);
+      const vSample = sampleTexture(velocityRT, normalizedX, m.y);
+
+      m.pressure = Math.round(pSample.r * 1000) / 1000;
+      m.velocityX = Math.round(vSample.r * 1000) / 1000;
+      m.velocityY = Math.round(vSample.g * 1000) / 1000;
+      m.velocityMag = Math.round(Math.sqrt(m.velocityX * m.velocityX + m.velocityY * m.velocityY) * 1000) / 1000;
+    }
+  }
+}
+
+function drawMeasurementOverlay() {
+  if (!overlayCtx) return;
+
+  // Clear the overlay
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+  overlayCtx.font = "12px monospace";
+  overlayCtx.textBaseline = "top";
+
+  for (let i = 0; i < measurements.length; i++) {
+    const m = measurements[i];
+    if (!m.enabled) continue;
+
+    // Convert position to screen coordinates
+    const screenX = (m.x / aspect.x) * overlayCanvas.width;
+
+    if (m.type === "line") {
+      // Draw vertical line
+      overlayCtx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+      overlayCtx.lineWidth = 2;
+      overlayCtx.setLineDash([5, 5]);
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(screenX, 0);
+      overlayCtx.lineTo(screenX, overlayCanvas.height);
+      overlayCtx.stroke();
+      overlayCtx.setLineDash([]);
+
+      // Draw label with background
+      const label = `L${i + 1}: P=${m.pressure.toFixed(3)} V=${m.velocityMag.toFixed(3)}`;
+      const labelX = screenX + 5;
+      const labelY = 10 + i * 40;
+
+      overlayCtx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      const textWidth = overlayCtx.measureText(label).width;
+      overlayCtx.fillRect(labelX - 2, labelY - 2, textWidth + 4, 16);
+
+      overlayCtx.fillStyle = "#00ff00";
+      overlayCtx.fillText(label, labelX, labelY);
+    } else {
+      // Draw point marker
+      const screenY = (1 - m.y) * overlayCanvas.height;
+
+      overlayCtx.strokeStyle = "rgba(255, 255, 0, 0.9)";
+      overlayCtx.lineWidth = 2;
+      overlayCtx.beginPath();
+      overlayCtx.arc(screenX, screenY, 8, 0, Math.PI * 2);
+      overlayCtx.stroke();
+
+      // Crosshair
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(screenX - 12, screenY);
+      overlayCtx.lineTo(screenX + 12, screenY);
+      overlayCtx.moveTo(screenX, screenY - 12);
+      overlayCtx.lineTo(screenX, screenY + 12);
+      overlayCtx.stroke();
+
+      // Draw label with background
+      const label = `P${i + 1}: P=${m.pressure.toFixed(3)} V=${m.velocityMag.toFixed(3)}`;
+      const labelX = screenX + 15;
+      const labelY = screenY - 8;
+
+      overlayCtx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      const textWidth = overlayCtx.measureText(label).width;
+      overlayCtx.fillRect(labelX - 2, labelY - 2, textWidth + 4, 16);
+
+      overlayCtx.fillStyle = "#ffff00";
+      overlayCtx.fillText(label, labelX, labelY);
+    }
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   stats.begin();
