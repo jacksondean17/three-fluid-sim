@@ -29,7 +29,11 @@ export class BoundaryPass {
     this.material = new RawShaderMaterial({
       uniforms: {
         velocity: new Uniform(Texture.DEFAULT_IMAGE),
-        flowEnabled: new Uniform(false)
+        flowEnabled: new Uniform(false),
+        obstacleEnabled: new Uniform(false),
+        obstaclePos: new Uniform(new Vector2(0.5, 0.5)),
+        obstacleSize: new Uniform(0.1),
+        aspect: new Uniform(new Vector2(1.0, 1.0))
       },
       vertexShader: `
         attribute vec2 position;
@@ -45,6 +49,10 @@ export class BoundaryPass {
         varying vec2 vUV;
         uniform sampler2D velocity;
         uniform bool flowEnabled;
+        uniform bool obstacleEnabled;
+        uniform vec2 obstaclePos;
+        uniform float obstacleSize;
+        uniform vec2 aspect;
 
         void main() {
           vec2 texelSize = vec2(dFdx(vUV.x), dFdy(vUV.y));
@@ -55,12 +63,33 @@ export class BoundaryPass {
           float topEdgeMask = ceil(vUV.y - (1.0 - texelSize.y));
 
           // When flow is enabled, only enforce top/bottom boundaries
-          float mask;
+          float edgeMask;
           if (flowEnabled) {
-            mask = clamp(bottomEdgeMask + topEdgeMask, 0.0, 1.0);
+            edgeMask = clamp(bottomEdgeMask + topEdgeMask, 0.0, 1.0);
           } else {
-            mask = clamp(leftEdgeMask + bottomEdgeMask + rightEdgeMask + topEdgeMask, 0.0, 1.0);
+            edgeMask = clamp(leftEdgeMask + bottomEdgeMask + rightEdgeMask + topEdgeMask, 0.0, 1.0);
           }
+
+          // Obstacle boundary check
+          float obstacleMask = 0.0;
+          if (obstacleEnabled) {
+            // Scale UV to aspect ratio for proper square shape
+            vec2 scaledUV = vec2(vUV.x * aspect.x, vUV.y);
+            vec2 scaledObsPos = vec2(obstaclePos.x * aspect.x, obstaclePos.y);
+            float halfSize = obstacleSize * 0.5;
+
+            // Check if inside obstacle (using box distance)
+            vec2 d = abs(scaledUV - scaledObsPos) - vec2(halfSize);
+            float inside = step(max(d.x, d.y), 0.0);
+
+            // Check if at obstacle edge (within one texel of boundary)
+            vec2 edgeDist = abs(scaledUV - scaledObsPos) - vec2(halfSize);
+            float atEdge = step(max(edgeDist.x, edgeDist.y), texelSize.x * 2.0) * inside;
+
+            obstacleMask = inside;
+          }
+
+          float mask = clamp(edgeMask + obstacleMask, 0.0, 1.0);
           float direction = mix(1.0, -1.0, mask);
 
           gl_FragColor = texture2D(velocity, vUV) * direction;
@@ -80,6 +109,18 @@ export class BoundaryPass {
     }
     if (uniforms.flowEnabled !== undefined) {
       this.material.uniforms.flowEnabled.value = uniforms.flowEnabled;
+    }
+    if (uniforms.obstacleEnabled !== undefined) {
+      this.material.uniforms.obstacleEnabled.value = uniforms.obstacleEnabled;
+    }
+    if (uniforms.obstaclePos !== undefined) {
+      this.material.uniforms.obstaclePos.value = uniforms.obstaclePos;
+    }
+    if (uniforms.obstacleSize !== undefined) {
+      this.material.uniforms.obstacleSize.value = uniforms.obstacleSize;
+    }
+    if (uniforms.aspect !== undefined) {
+      this.material.uniforms.aspect.value = uniforms.aspect;
     }
   }
 }

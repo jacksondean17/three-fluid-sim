@@ -42,6 +42,8 @@ const configuration = {
   AddColor: true,
   FlowEnabled: false,
   FlowVelocity: 0.5,
+  ObstacleEnabled: true,
+  ObstacleSize: 0.1,
   Visualize: "Color",
   Mode: "Spectral",
   Timestep: "1/60",
@@ -169,20 +171,49 @@ interface ITouchInput {
 }
 
 let inputTouches: ITouchInput[] = [];
+
+// Obstacle state
+const obstaclePosition = new Vector2(0.5, 0.5); // Center of screen (normalized)
+let draggingObstacle = false;
+
+// Check if a point (in aspect-scaled coords) is inside the obstacle
+function isInsideObstacle(x: number, y: number): boolean {
+  if (!configuration.ObstacleEnabled) return false;
+  const halfSize = configuration.ObstacleSize * 0.5;
+  const obsX = obstaclePosition.x * aspect.x;
+  const obsY = obstaclePosition.y;
+  return (
+    x >= obsX - halfSize &&
+    x <= obsX + halfSize &&
+    y >= obsY - halfSize &&
+    y <= obsY + halfSize
+  );
+}
+
 canvas.addEventListener("mousedown", (event: MouseEvent) => {
   if (event.button === 0) {
     const x = (event.clientX / canvas.clientWidth) * aspect.x;
     const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
-    inputTouches.push({
-      id: "mouse",
-      input: new Vector4(x, y, 0, 0)
-    });
+
+    // Check if clicking on obstacle
+    if (isInsideObstacle(x, y)) {
+      draggingObstacle = true;
+    } else {
+      inputTouches.push({
+        id: "mouse",
+        input: new Vector4(x, y, 0, 0)
+      });
+    }
   }
 });
 canvas.addEventListener("mousemove", (event: MouseEvent) => {
-  if (inputTouches.length > 0) {
-    const x = (event.clientX / canvas.clientWidth) * aspect.x;
-    const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
+  const x = (event.clientX / canvas.clientWidth) * aspect.x;
+  const y = 1.0 - (event.clientY + window.scrollY) / canvas.clientHeight;
+
+  if (draggingObstacle) {
+    // Update obstacle position (convert back to normalized coords)
+    obstaclePosition.set(x / aspect.x, y);
+  } else if (inputTouches.length > 0) {
     inputTouches[0].input
       .setZ(x - inputTouches[0].input.x)
       .setW(y - inputTouches[0].input.y);
@@ -191,7 +222,11 @@ canvas.addEventListener("mousemove", (event: MouseEvent) => {
 });
 canvas.addEventListener("mouseup", (event: MouseEvent) => {
   if (event.button === 0) {
-    inputTouches.pop();
+    if (draggingObstacle) {
+      draggingObstacle = false;
+    } else {
+      inputTouches.pop();
+    }
   }
 });
 
@@ -308,6 +343,10 @@ function initGUI() {
   flow.add(configuration, "FlowEnabled");
   flow.add(configuration, "FlowVelocity", 0.0, 2.0, 0.1);
 
+  const obstacle = gui.addFolder("Obstacle");
+  obstacle.add(configuration, "ObstacleEnabled");
+  obstacle.add(configuration, "ObstacleSize", 0.05, 0.3, 0.01);
+
   gui.add(configuration, "Visualize", [
     "Color",
     "Velocity",
@@ -375,11 +414,15 @@ function render() {
       renderer.render(flowSourcePass.scene, camera);
     }
 
-    // Add velocity boundaries (simulation walls).
-    if (configuration.Boundaries) {
+    // Add velocity boundaries (simulation walls and obstacles).
+    if (configuration.Boundaries || configuration.ObstacleEnabled) {
       velocityBoundary.update({
         velocity: v,
-        flowEnabled: configuration.FlowEnabled
+        flowEnabled: configuration.FlowEnabled,
+        obstacleEnabled: configuration.ObstacleEnabled,
+        obstaclePos: obstaclePosition,
+        obstacleSize: configuration.ObstacleSize,
+        aspect
       });
       v = velocityRT.set(renderer);
       renderer.render(velocityBoundary.scene, camera);
