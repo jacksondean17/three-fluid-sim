@@ -179,6 +179,64 @@ export class CompositionPass {
               finalColor.rgb = mix(finalColor.rgb, borderColor, onBorder);
             }
 
+            // Draw color key legend for Spectral and Gradient modes
+            #if MODE == 2 || MODE == 3
+            {
+              // Color key dimensions (in UV space)
+              float keyWidth = 0.025;
+              float keyHeight = 0.3;
+              float keyMargin = 0.02;
+              float keyBorder = 0.003;
+
+              // Position in bottom-left corner
+              float keyLeft = keyMargin;
+              float keyRight = keyLeft + keyWidth;
+              float keyBottom = keyMargin;
+              float keyTop = keyBottom + keyHeight;
+
+              // Check if we're in the color key area
+              if (vUV.x >= keyLeft - keyBorder && vUV.x <= keyRight + keyBorder &&
+                  vUV.y >= keyBottom - keyBorder && vUV.y <= keyTop + keyBorder) {
+
+                // Check if we're on the border
+                bool onKeyBorder = vUV.x < keyLeft || vUV.x > keyRight ||
+                                   vUV.y < keyBottom || vUV.y > keyTop;
+
+                if (onKeyBorder) {
+                  // Draw white border
+                  finalColor = vec4(1.0, 1.0, 1.0, 1.0);
+                } else {
+                  // Draw the gradient inside the key
+                  float t = (vUV.y - keyBottom) / keyHeight;
+                  #if MODE == 2
+                  finalColor = spectral(mix(340.0, 700.0, t));
+                  #elif MODE == 3
+                  finalColor = texture2D(gradient, vec2(t, 0.0));
+                  #endif
+                }
+              }
+
+              // Draw "LOW" marker (small triangle pointing left at bottom)
+              float markerSize = 0.012;
+              float lowMarkerY = keyBottom;
+              float lowMarkerX = keyRight + keyBorder + 0.008;
+              vec2 lowPos = vUV - vec2(lowMarkerX, lowMarkerY);
+              if (lowPos.x <= 0.0 && lowPos.x >= -markerSize &&
+                  abs(lowPos.y) <= markerSize * (1.0 + lowPos.x / markerSize)) {
+                finalColor = vec4(1.0, 1.0, 1.0, 1.0);
+              }
+
+              // Draw "HIGH" marker (small triangle pointing left at top)
+              float highMarkerY = keyTop;
+              float highMarkerX = keyRight + keyBorder + 0.008;
+              vec2 highPos = vUV - vec2(highMarkerX, highMarkerY);
+              if (highPos.x <= 0.0 && highPos.x >= -markerSize &&
+                  abs(highPos.y) <= markerSize * (1.0 + highPos.x / markerSize)) {
+                finalColor = vec4(1.0, 1.0, 1.0, 1.0);
+              }
+            }
+            #endif
+
             gl_FragColor = finalColor;
           }`,
       depthTest: false,
