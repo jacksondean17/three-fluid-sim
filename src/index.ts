@@ -7,6 +7,7 @@ import {
   TextureLoader,
   UnsignedByteType,
   Vector2,
+  Vector3,
   Vector4,
   WebGLRenderer
 } from "three";
@@ -22,6 +23,7 @@ import { TouchColorPass } from "./passes/TouchColorPass";
 import { TouchForcePass } from "./passes/TouchForcePass";
 import { VelocityInitPass } from "./passes/VelocityInitPass";
 import { MeasurementPass } from "./passes/MeasurementPass";
+import { SmokeEmitterPass } from "./passes/SmokeEmitterPass";
 import { RenderTarget } from "./RenderTarget";
 
 // tslint:disable:no-var-requires
@@ -80,6 +82,10 @@ const configuration = {
   Mode: "Spectral",
   SpectralMin: 400,
   SpectralMax: 650,
+  SmokeEnabled: true,
+  SmokeEmitters: 3,
+  SmokeRadius: 0.015,
+  SmokeIntensity: 0.4,
   Timestep: "1/60",
   Reset: () => {
     velocityAdvectionPass.update({
@@ -202,6 +208,16 @@ const velocityDivergencePass = new DivergencePass();
 const pressurePass = new JacobiIterationsPass();
 const pressureSubstractionPass = new GradientSubstractionPass();
 const compositionPass = new CompositionPass();
+
+// Smoke emitter system
+const smokeEmitterPass = new SmokeEmitterPass(resolution);
+const emitterPositions = [
+  new Vector3(0.05, 0.25, 1.0),  // x, y, enabled
+  new Vector3(0.05, 0.5, 1.0),
+  new Vector3(0.05, 0.75, 1.0),
+  new Vector3(0.05, 0.5, 0.0)   // 4th disabled by default
+];
+let smokeTime = 0;
 
 // Measurement system - uses UnsignedByteType for reliable readback
 const measurementRT = new RenderTarget(new Vector2(1, 1), 1, RGBAFormat, UnsignedByteType);
@@ -427,6 +443,13 @@ function initGUI() {
   gui.add(configuration, "SpectralMin", 340, 600, 10);
   gui.add(configuration, "SpectralMax", 450, 700, 10);
 
+  // Smoke emitter controls
+  const smokeFolder = gui.addFolder("Smoke");
+  smokeFolder.add(configuration, "SmokeEnabled").name("Enabled");
+  smokeFolder.add(configuration, "SmokeEmitters", 1, 4, 1).name("Emitters");
+  smokeFolder.add(configuration, "SmokeRadius", 0.005, 0.05, 0.005).name("Radius");
+  smokeFolder.add(configuration, "SmokeIntensity", 0.1, 1.0, 0.1).name("Intensity");
+
   // Measurement controls
   const measureFolder = gui.addFolder("Measurements");
   const measurementFolders: any[] = [];
@@ -594,6 +617,31 @@ function render() {
     });
     c = colorRT.set(renderer);
     renderer.render(colorAdvectionPass.scene, camera);
+
+    // Add smoke/dye from emitters
+    if (configuration.SmokeEnabled) {
+      smokeTime += dt;
+
+      // Update emitter enabled states based on SmokeEmitters count
+      for (let i = 0; i < 4; i++) {
+        emitterPositions[i].z = i < configuration.SmokeEmitters ? 1.0 : 0.0;
+      }
+
+      smokeEmitterPass.update({
+        colorBuffer: c,
+        aspect,
+        emitter0: emitterPositions[0],
+        emitter1: emitterPositions[1],
+        emitter2: emitterPositions[2],
+        emitter3: emitterPositions[3],
+        emitterRadius: configuration.SmokeRadius,
+        emitterIntensity: configuration.SmokeIntensity,
+        emitterColor: new Vector3(1.0, 1.0, 1.0),
+        time: smokeTime
+      });
+      c = colorRT.set(renderer);
+      renderer.render(smokeEmitterPass.scene, camera);
+    }
 
     // Feed the input of the advection passes with the last advected results.
     velocityAdvectionPass.update({
