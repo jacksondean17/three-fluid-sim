@@ -31,13 +31,36 @@ const gradients: string[] = ["gradient.jpg"];
 const gradientTextures: Texture[] = [];
 loadGradients();
 
+// Fluid presets with different viscosity characteristics
+// Note: "viscosity" here is a velocity decay factor, not physical viscosity.
+// Values are tuned for visual approximation of relative fluid behaviors,
+// not physically accurate simulation. Real kinematic viscosities span
+// many orders of magnitude (air ~1.5e-5, water ~1e-6, honey ~1e-2 m²/s).
+interface IFluidPreset {
+  viscosity: number;
+  colorDecay: number;
+}
+
+const fluidPresets: { [key: string]: IFluidPreset } = {
+  Air: { viscosity: 0.0001, colorDecay: 0.015 },
+  Alcohol: { viscosity: 0.0008, colorDecay: 0.004 },
+  Water: { viscosity: 0.001, colorDecay: 0.005 },
+  "Light Oil": { viscosity: 0.005, colorDecay: 0.003 },
+  "Heavy Oil": { viscosity: 0.012, colorDecay: 0.002 },
+  Honey: { viscosity: 0.025, colorDecay: 0.001 },
+  Molasses: { viscosity: 0.04, colorDecay: 0.0005 },
+  Custom: { viscosity: 0.001, colorDecay: 0.005 }
+};
+
 // App configuration options.
 const configuration = {
   Simulate: true,
   Iterations: 32,
   Radius: 0.25,
   Scale: 0.5,
-  ColorDecay: 0.01,
+  FluidPreset: "Water",
+  Viscosity: 0.001,
+  ColorDecay: 0.005,
   Boundaries: true,
   AddColor: true,
   FlowEnabled: false,
@@ -72,6 +95,11 @@ const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const stats = new Stats();
 canvas.parentElement.appendChild(stats.dom);
 const gui = new dat.GUI();
+
+// Declare GUI controllers before initGUI() to avoid TDZ errors
+let viscosityController: any;
+let colorDecayController: any;
+
 initGUI();
 
 const renderer = new WebGLRenderer({ canvas });
@@ -293,8 +321,30 @@ function loadGradients() {
   }
 }
 
-// Dat.GUI configuration.
 function initGUI() {
+  // Fluid properties folder
+  const fluid = gui.addFolder("Fluid");
+  fluid
+    .add(configuration, "FluidPreset", Object.keys(fluidPresets))
+    .onChange((value: string) => {
+      if (value !== "Custom") {
+        const preset = fluidPresets[value];
+        configuration.Viscosity = preset.viscosity;
+        configuration.ColorDecay = preset.colorDecay;
+        // Controllers may not exist during initial GUI setup
+        if (viscosityController) viscosityController.updateDisplay();
+        if (colorDecayController) colorDecayController.updateDisplay();
+      }
+    });
+  viscosityController = fluid.add(configuration, "Viscosity", 0.0, 0.1, 0.001)
+    .onChange(() => {
+      configuration.FluidPreset = "Custom";
+    });
+  colorDecayController = fluid.add(configuration, "ColorDecay", 0.0, 0.1, 0.001)
+    .onChange(() => {
+      configuration.FluidPreset = "Custom";
+    });
+
   const sim = gui.addFolder("Simulation");
   sim
     .add(configuration, "Scale", 0.1, 2.0, 0.1)
@@ -309,7 +359,6 @@ function initGUI() {
       colorRT.resize(resolution);
     });
   sim.add(configuration, "Iterations", 16, 128, 1);
-  sim.add(configuration, "ColorDecay", 0.0, 0.1, 0.01);
   sim
     .add(configuration, "Timestep", ["1/15", "1/30", "1/60", "1/90", "1/120"])
     .onChange((value: string) => {
@@ -378,8 +427,8 @@ function initGUI() {
 // Render loop.
 function render() {
   if (configuration.Simulate) {
-    // Advect the velocity vector field.
-    velocityAdvectionPass.update({ timeDelta: dt });
+    // Advect the velocity vector field (with viscosity/decay).
+    velocityAdvectionPass.update({ timeDelta: dt, decay: configuration.Viscosity });
     v = velocityRT.set(renderer);
     renderer.render(velocityAdvectionPass.scene, camera);
 
