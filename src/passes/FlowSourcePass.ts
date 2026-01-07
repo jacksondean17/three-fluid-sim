@@ -9,13 +9,13 @@ import {
   Vector2
 } from "three";
 
-export class BoundaryPass {
+export class FlowSourcePass {
   public readonly scene: Scene;
 
   private material: RawShaderMaterial;
   private mesh: Mesh;
 
-  constructor() {
+  constructor(readonly resolution: Vector2) {
     this.scene = new Scene();
 
     const geometry = new BufferGeometry();
@@ -28,8 +28,9 @@ export class BoundaryPass {
     );
     this.material = new RawShaderMaterial({
       uniforms: {
-        velocity: new Uniform(Texture.DEFAULT_IMAGE),
-        flowEnabled: new Uniform(false)
+        aspect: new Uniform(new Vector2(resolution.x / resolution.y, 1.0)),
+        flowVelocity: new Uniform(0.5),
+        velocity: new Uniform(Texture.DEFAULT_IMAGE)
       },
       vertexShader: `
         attribute vec2 position;
@@ -43,43 +44,42 @@ export class BoundaryPass {
         precision highp float;
         precision highp int;
         varying vec2 vUV;
+        uniform vec2 aspect;
+        uniform float flowVelocity;
         uniform sampler2D velocity;
-        uniform bool flowEnabled;
 
         void main() {
-          vec2 texelSize = vec2(dFdx(vUV.x), dFdy(vUV.y));
+          vec4 currentVelocity = texture2D(velocity, vUV);
 
-          float leftEdgeMask = ceil(texelSize.x - vUV.x);
-          float bottomEdgeMask = ceil(texelSize.y - vUV.y);
-          float rightEdgeMask = ceil(vUV.x - (1.0 - texelSize.x));
-          float topEdgeMask = ceil(vUV.y - (1.0 - texelSize.y));
+          // Calculate distance from left edge (0.0 to 1.0)
+          float edgeWidth = 0.05; // 5% of screen width
+          float distFromLeft = vUV.x / edgeWidth;
 
-          // When flow is enabled, only enforce top/bottom boundaries
-          float mask;
-          if (flowEnabled) {
-            mask = clamp(bottomEdgeMask + topEdgeMask, 0.0, 1.0);
-          } else {
-            mask = clamp(leftEdgeMask + bottomEdgeMask + rightEdgeMask + topEdgeMask, 0.0, 1.0);
-          }
-          float direction = mix(1.0, -1.0, mask);
+          // Smooth falloff from left edge
+          float strength = 1.0 - smoothstep(0.0, 1.0, distFromLeft);
 
-          gl_FragColor = texture2D(velocity, vUV) * direction;
+          // Add rightward velocity (positive X direction)
+          vec2 flowForce = vec2(flowVelocity * strength, 0.0);
+
+          gl_FragColor = currentVelocity + vec4(flowForce, 0.0, 0.0);
         }`,
       depthTest: false,
-      depthWrite: false,
-      extensions: { derivatives: true }
+      depthWrite: false
     });
     this.mesh = new Mesh(geometry, this.material);
-    this.mesh.frustumCulled = false; // Just here to silence a console error.
+    this.mesh.frustumCulled = false;
     this.scene.add(this.mesh);
   }
 
   public update(uniforms: any): void {
+    if (uniforms.aspect !== undefined) {
+      this.material.uniforms.aspect.value = uniforms.aspect;
+    }
+    if (uniforms.flowVelocity !== undefined) {
+      this.material.uniforms.flowVelocity.value = uniforms.flowVelocity;
+    }
     if (uniforms.velocity !== undefined) {
       this.material.uniforms.velocity.value = uniforms.velocity;
-    }
-    if (uniforms.flowEnabled !== undefined) {
-      this.material.uniforms.flowEnabled.value = uniforms.flowEnabled;
     }
   }
 }

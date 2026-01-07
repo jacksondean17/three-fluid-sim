@@ -14,6 +14,7 @@ import { BoundaryPass } from "./passes/BoundaryPass";
 import { ColorInitPass } from "./passes/ColorInitPass";
 import { CompositionPass } from "./passes/CompositionPass";
 import { DivergencePass } from "./passes/DivergencePass";
+import { FlowSourcePass } from "./passes/FlowSourcePass";
 import { GradientSubstractionPass } from "./passes/GradientSubstractionPass";
 import { JacobiIterationsPass } from "./passes/JacobiIterationsPass";
 import { TouchColorPass } from "./passes/TouchColorPass";
@@ -39,6 +40,8 @@ const configuration = {
   ColorDecay: 0.01,
   Boundaries: true,
   AddColor: true,
+  FlowEnabled: false,
+  FlowVelocity: 0.5,
   Visualize: "Color",
   Mode: "Spectral",
   Timestep: "1/60",
@@ -128,6 +131,7 @@ const touchColorAdditionPass = new TouchColorPass(
   resolution,
   configuration.Radius
 );
+const flowSourcePass = new FlowSourcePass(resolution);
 const velocityBoundary = new BoundaryPass();
 const velocityDivergencePass = new DivergencePass();
 const pressurePass = new JacobiIterationsPass();
@@ -300,6 +304,10 @@ function initGUI() {
   input.add(configuration, "Radius", 0.1, 1, 0.1);
   input.add(configuration, "AddColor");
 
+  const flow = gui.addFolder("Flow");
+  flow.add(configuration, "FlowEnabled");
+  flow.add(configuration, "FlowVelocity", 0.0, 2.0, 0.1);
+
   gui.add(configuration, "Visualize", [
     "Color",
     "Velocity",
@@ -357,9 +365,22 @@ function render() {
       }
     }
 
+    // Add flow source velocity (continuous left-to-right flow).
+    if (configuration.FlowEnabled) {
+      flowSourcePass.update({
+        velocity: v,
+        flowVelocity: configuration.FlowVelocity
+      });
+      v = velocityRT.set(renderer);
+      renderer.render(flowSourcePass.scene, camera);
+    }
+
     // Add velocity boundaries (simulation walls).
     if (configuration.Boundaries) {
-      velocityBoundary.update({ velocity: v });
+      velocityBoundary.update({
+        velocity: v,
+        flowEnabled: configuration.FlowEnabled
+      });
       v = velocityRT.set(renderer);
       renderer.render(velocityBoundary.scene, camera);
     }
