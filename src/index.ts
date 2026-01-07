@@ -117,6 +117,9 @@ interface IMeasurement {
   velocityX: number;
   velocityY: number;
   velocityMag: number;
+  // Formatted strings for GUI display
+  pressureDisplay: string;
+  velocityDisplay: string;
 }
 
 const measurements: IMeasurement[] = [];
@@ -127,14 +130,18 @@ const measurementConfig = {
 };
 
 // Initialize with a couple of default measurements
-measurements.push({ type: "line", x: 0.3, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
-measurements.push({ type: "line", x: 0.7, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+measurements.push({ type: "line", x: 0.3, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
+measurements.push({ type: "line", x: 0.7, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
 
 // Html/Three.js initialization.
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const stats = new Stats();
 canvas.parentElement.appendChild(stats.dom);
 const gui = new dat.GUI();
+
+// Make GUI scrollable for smaller screens
+gui.domElement.style.maxHeight = "calc(100vh - 20px)";
+gui.domElement.style.overflowY = "auto";
 
 // Declare GUI controllers before initGUI() to avoid TDZ errors
 let viscosityController: any;
@@ -457,13 +464,13 @@ function initGUI() {
   const measurementActions = {
     addLine: () => {
       if (measurements.length < MAX_MEASUREMENTS) {
-        measurements.push({ type: "line", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+        measurements.push({ type: "line", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
         rebuildMeasurementGUI();
       }
     },
     addPoint: () => {
       if (measurements.length < MAX_MEASUREMENTS) {
-        measurements.push({ type: "point", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0 });
+        measurements.push({ type: "point", x: 0.5, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
         rebuildMeasurementGUI();
       }
     }
@@ -492,8 +499,8 @@ function initGUI() {
       if (m.type === "point") {
         folder.add(m, "y", 0, 1, 0.01).name("Y Position");
       }
-      folder.add(m, "pressure").name("Pressure").listen();
-      folder.add(m, "velocityMag").name("Velocity").listen();
+      folder.add(m, "pressureDisplay").name("Pressure").listen();
+      folder.add(m, "velocityDisplay").name("Velocity").listen();
 
       const removeConfig = {
         remove: () => {
@@ -788,6 +795,10 @@ function updateMeasurements() {
       m.velocityY = Math.round(sample.velY * 1000) / 1000;
       m.velocityMag = Math.round(Math.sqrt(m.velocityX * m.velocityX + m.velocityY * m.velocityY) * 1000) / 1000;
     }
+
+    // Update formatted display strings for GUI
+    m.pressureDisplay = m.pressure.toFixed(3);
+    m.velocityDisplay = m.velocityMag.toFixed(3);
   }
 }
 
