@@ -76,6 +76,8 @@ const configuration = {
   ChevronSpacingY: 0.12,
   Visualize: "Pressure",
   Mode: "Spectral",
+  SpectralMin: 400,
+  SpectralMax: 650,
   Timestep: "1/60",
   Reset: () => {
     velocityAdvectionPass.update({
@@ -390,6 +392,8 @@ function initGUI() {
     "Spectral",
     "Gradient"
   ]);
+  gui.add(configuration, "SpectralMin", 340, 600, 10);
+  gui.add(configuration, "SpectralMax", 450, 700, 10);
 
   const github = gui.add(configuration, "Github");
   github.__li.className = "guiIconText";
@@ -533,6 +537,8 @@ function render() {
     colorBuffer: visualization,
     mode: configuration.Mode,
     gradient: gradientTextures[0],
+    spectralMin: configuration.SpectralMin,
+    spectralMax: configuration.SpectralMax,
     chevronEnabled: configuration.ChevronEnabled,
     chevronColumns: configuration.ChevronColumns,
     chevronRows: configuration.ChevronRows,

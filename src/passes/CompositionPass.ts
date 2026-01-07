@@ -30,6 +30,8 @@ export class CompositionPass {
       uniforms: {
         colorBuffer: new Uniform(Texture.DEFAULT_IMAGE),
         gradient: new Uniform(Texture.DEFAULT_IMAGE),
+        spectralMin: new Uniform(400.0),
+        spectralMax: new Uniform(650.0),
         chevronEnabled: new Uniform(false),
         chevronColumns: new Uniform(3),
         chevronRows: new Uniform(4),
@@ -59,6 +61,8 @@ export class CompositionPass {
           varying vec2 vUV;
           uniform sampler2D colorBuffer;
           uniform sampler2D gradient;
+          uniform float spectralMin;
+          uniform float spectralMax;
           uniform bool chevronEnabled;
           uniform int chevronColumns;
           uniform int chevronRows;
@@ -123,7 +127,7 @@ export class CompositionPass {
             #elif MODE == 1
             finalColor = vec4(lum);
             #elif MODE == 2
-            finalColor = spectral(mix(340.0, 700.0, lum));
+            finalColor = spectral(mix(spectralMin, spectralMax, lum));
             #elif MODE == 3
             finalColor = texture2D(gradient, vec2(lum, 0.0));
             #endif
@@ -209,7 +213,7 @@ export class CompositionPass {
                   // Draw the gradient inside the key
                   float t = (vUV.y - keyBottom) / keyHeight;
                   #if MODE == 2
-                  finalColor = spectral(mix(340.0, 700.0, t));
+                  finalColor = spectral(mix(spectralMin, spectralMax, t));
                   #elif MODE == 3
                   finalColor = texture2D(gradient, vec2(t, 0.0));
                   #endif
@@ -274,6 +278,12 @@ export class CompositionPass {
     }
     if (uniforms.gradient !== undefined) {
       this.material.uniforms.gradient.value = uniforms.gradient;
+    }
+    if (uniforms.spectralMin !== undefined) {
+      this.material.uniforms.spectralMin.value = uniforms.spectralMin;
+    }
+    if (uniforms.spectralMax !== undefined) {
+      this.material.uniforms.spectralMax.value = uniforms.spectralMax;
     }
     if (uniforms.chevronEnabled !== undefined) {
       this.material.uniforms.chevronEnabled.value = uniforms.chevronEnabled;
