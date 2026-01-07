@@ -24,6 +24,7 @@ import { TouchForcePass } from "./passes/TouchForcePass";
 import { VelocityInitPass } from "./passes/VelocityInitPass";
 import { MeasurementPass } from "./passes/MeasurementPass";
 import { SmokeEmitterPass } from "./passes/SmokeEmitterPass";
+import { ObstacleMaskPass } from "./passes/ObstacleMaskPass";
 import { RenderTarget } from "./RenderTarget";
 
 // tslint:disable:no-var-requires
@@ -86,6 +87,7 @@ const configuration = {
   SmokeEmitters: 3,
   SmokeRadius: 0.015,
   SmokeIntensity: 0.4,
+  SimulationMode: "Standard",
   Timestep: "1/60",
   Reset: () => {
     velocityAdvectionPass.update({
@@ -232,6 +234,11 @@ const measurementPass = new MeasurementPass();
 const measurementBuffer = new Uint8Array(4);
 const VALUE_SCALE = 10.0; // Must match shader valueScale uniform
 
+// Obstacle mask system for obstacle-aware pressure solving
+const obstacleMaskRT = new RenderTarget(resolution, 1, RGBAFormat, UnsignedByteType);
+const obstacleMaskPass = new ObstacleMaskPass();
+let obstacleMaskTexture: Texture;
+
 // Event listeners (resizing and mouse/touch input).
 window.addEventListener("resize", (event: UIEvent) => {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -245,6 +252,7 @@ window.addEventListener("resize", (event: UIEvent) => {
   divergenceRT.resize(resolution);
   pressureRT.resize(resolution);
   colorRT.resize(resolution);
+  obstacleMaskRT.resize(resolution);
 
   aspect.set(resolution.x / resolution.y, 1.0);
   touchForceAdditionPass.update({ aspect });
@@ -389,8 +397,10 @@ function initGUI() {
       divergenceRT.resize(resolution);
       pressureRT.resize(resolution);
       colorRT.resize(resolution);
+      obstacleMaskRT.resize(resolution);
     });
   sim.add(configuration, "Iterations", 16, 128, 1);
+  sim.add(configuration, "SimulationMode", ["Standard", "Obstacle-Aware"]).name("Solver Mode");
   sim
     .add(configuration, "Timestep", ["1/15", "1/30", "1/60", "1/90", "1/120"])
     .onChange((value: string) => {
@@ -596,9 +606,32 @@ function render() {
     d = divergenceRT.set(renderer);
     renderer.render(velocityDivergencePass.scene, camera);
 
+    // Render obstacle mask if using obstacle-aware mode
+    const useObstacleAware = configuration.SimulationMode === "Obstacle-Aware" && configuration.ChevronEnabled;
+    if (useObstacleAware) {
+      obstacleMaskPass.update({
+        chevronEnabled: configuration.ChevronEnabled,
+        chevronColumns: configuration.ChevronColumns,
+        chevronRows: configuration.ChevronRows,
+        chevronLength: configuration.ChevronLength,
+        chevronWidth: configuration.ChevronWidth,
+        chevronAngle: configuration.ChevronAngle,
+        chevronGap: configuration.ChevronGap,
+        chevronSpacingX: configuration.ChevronSpacingX,
+        chevronSpacingY: configuration.ChevronSpacingY,
+        aspect
+      });
+      obstacleMaskTexture = obstacleMaskRT.set(renderer);
+      renderer.render(obstacleMaskPass.scene, camera);
+    }
+
     // Compute the pressure gradient of the advected velocity vector field (using
     // jacobi iterations).
-    pressurePass.update({ divergence: d });
+    pressurePass.update({
+      divergence: d,
+      obstacleMask: obstacleMaskTexture,
+      useObstacleMask: useObstacleAware
+    });
     for (let i = 0; i < configuration.Iterations; ++i) {
       p = pressureRT.set(renderer);
       renderer.render(pressurePass.scene, camera);
@@ -610,7 +643,9 @@ function render() {
     pressureSubstractionPass.update({
       timeDelta: dt,
       velocity: v,
-      pressure: p
+      pressure: p,
+      obstacleMask: obstacleMaskTexture,
+      useObstacleMask: useObstacleAware
     });
     v = velocityRT.set(renderer);
     renderer.render(pressureSubstractionPass.scene, camera);
