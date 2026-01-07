@@ -130,8 +130,8 @@ const measurementConfig = {
 };
 
 // Initialize with a couple of default measurements
-measurements.push({ type: "line", x: 0.3, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
-measurements.push({ type: "line", x: 0.7, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
+measurements.push({ type: "line", x: 0.75, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
+measurements.push({ type: "line", x: 1.3, y: 0.5, enabled: true, pressure: 0, velocityX: 0, velocityY: 0, velocityMag: 0, pressureDisplay: "0.000", velocityDisplay: "0.000" });
 
 // Html/Three.js initialization.
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
