@@ -21,6 +21,7 @@ import { JacobiIterationsPass } from "./passes/JacobiIterationsPass";
 import { TouchColorPass } from "./passes/TouchColorPass";
 import { TouchForcePass } from "./passes/TouchForcePass";
 import { VelocityInitPass } from "./passes/VelocityInitPass";
+import { MeasurementPass } from "./passes/MeasurementPass";
 import { RenderTarget } from "./RenderTarget";
 
 // tslint:disable:no-var-requires
@@ -201,6 +202,12 @@ const velocityDivergencePass = new DivergencePass();
 const pressurePass = new JacobiIterationsPass();
 const pressureSubstractionPass = new GradientSubstractionPass();
 const compositionPass = new CompositionPass();
+
+// Measurement system - uses UnsignedByteType for reliable readback
+const measurementRT = new RenderTarget(new Vector2(1, 1), 1, RGBAFormat, UnsignedByteType);
+const measurementPass = new MeasurementPass();
+const measurementBuffer = new Uint8Array(4);
+const VALUE_SCALE = 10.0; // Must match shader valueScale uniform
 
 // Event listeners (resizing and mouse/touch input).
 window.addEventListener("resize", (event: UIEvent) => {
@@ -660,22 +667,39 @@ window.addEventListener("resize", () => {
   overlayCanvas.height = window.innerHeight;
 });
 
-// Buffer for reading texture pixels
-const pixelBuffer = new Float32Array(4);
+// Sample position vector for measurement pass
+const samplePosition = new Vector2();
 
-function sampleTexture(rt: RenderTarget, x: number, y: number): { r: number; g: number; b: number } {
+// Sample a single point from pressure and velocity textures using shader-based readback
+function sampleAtPosition(x: number, y: number): { pressure: number; velX: number; velY: number } {
   // Clamp normalized coordinates to valid range
   const clampedX = Math.max(0, Math.min(1, x));
   const clampedY = Math.max(0, Math.min(1, y));
 
-  // Convert normalized coordinates to texture pixel coordinates
-  const texX = Math.floor(clampedX * (resolution.x - 1));
-  const texY = Math.floor(clampedY * (resolution.y - 1));
+  samplePosition.set(clampedX, clampedY);
 
-  // Read single pixel from render target (use previous which contains the last rendered result)
-  renderer.readRenderTargetPixels(rt.previous, texX, texY, 1, 1, pixelBuffer);
+  // Update measurement pass with current textures and position
+  measurementPass.update({
+    pressureTexture: p,
+    velocityTexture: v,
+    samplePosition,
+    valueScale: VALUE_SCALE
+  });
 
-  return { r: pixelBuffer[0], g: pixelBuffer[1], b: pixelBuffer[2] };
+  // Render to 1x1 measurement texture
+  measurementRT.set(renderer);
+  renderer.render(measurementPass.scene, camera);
+
+  // Read the single pixel (this works reliably with UnsignedByteType)
+  renderer.readRenderTargetPixels(measurementRT.previous, 0, 0, 1, 1, measurementBuffer);
+
+  // Decode values: encoded = (value / scale + 0.5) => value = (encoded - 0.5) * scale
+  // Buffer values are 0-255, normalize to 0-1 first
+  const pressure = ((measurementBuffer[0] / 255) - 0.5) * VALUE_SCALE;
+  const velX = ((measurementBuffer[1] / 255) - 0.5) * VALUE_SCALE;
+  const velY = ((measurementBuffer[2] / 255) - 0.5) * VALUE_SCALE;
+
+  return { pressure, velX, velY };
 }
 
 function updateMeasurements() {
@@ -689,20 +713,18 @@ function updateMeasurements() {
 
     if (m.type === "line") {
       // Sample multiple points along the vertical line and average
-      const numSamples = 32;
+      const numSamples = 8; // Reduced from 32 since each sample requires a render pass
       let pressureSum = 0;
       let velXSum = 0;
       let velYSum = 0;
 
       for (let i = 0; i < numSamples; i++) {
         const y = (i + 0.5) / numSamples;
+        const sample = sampleAtPosition(normalizedX, y);
 
-        const pSample = sampleTexture(pressureRT, normalizedX, y);
-        const vSample = sampleTexture(velocityRT, normalizedX, y);
-
-        pressureSum += pSample.r;
-        velXSum += vSample.r;
-        velYSum += vSample.g;
+        pressureSum += sample.pressure;
+        velXSum += sample.velX;
+        velYSum += sample.velY;
       }
 
       m.pressure = Math.round((pressureSum / numSamples) * 1000) / 1000;
@@ -711,12 +733,11 @@ function updateMeasurements() {
       m.velocityMag = Math.round(Math.sqrt(m.velocityX * m.velocityX + m.velocityY * m.velocityY) * 1000) / 1000;
     } else {
       // Point measurement - single sample
-      const pSample = sampleTexture(pressureRT, normalizedX, m.y);
-      const vSample = sampleTexture(velocityRT, normalizedX, m.y);
+      const sample = sampleAtPosition(normalizedX, m.y);
 
-      m.pressure = Math.round(pSample.r * 1000) / 1000;
-      m.velocityX = Math.round(vSample.r * 1000) / 1000;
-      m.velocityY = Math.round(vSample.g * 1000) / 1000;
+      m.pressure = Math.round(sample.pressure * 1000) / 1000;
+      m.velocityX = Math.round(sample.velX * 1000) / 1000;
+      m.velocityY = Math.round(sample.velY * 1000) / 1000;
       m.velocityMag = Math.round(Math.sqrt(m.velocityX * m.velocityX + m.velocityY * m.velocityY) * 1000) / 1000;
     }
   }
