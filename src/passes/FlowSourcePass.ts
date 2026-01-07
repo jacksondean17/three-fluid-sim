@@ -51,17 +51,20 @@ export class FlowSourcePass {
         void main() {
           vec4 currentVelocity = texture2D(velocity, vUV);
 
-          // Calculate distance from left edge (0.0 to 1.0)
+          // Calculate blend factor based on distance from left edge
           float edgeWidth = 0.05; // 5% of screen width
           float distFromLeft = vUV.x / edgeWidth;
 
-          // Smooth falloff from left edge
-          float strength = 1.0 - smoothstep(0.0, 1.0, distFromLeft);
+          // Blend factor: 1.0 at edge, 0.0 beyond edgeWidth
+          float blend = 1.0 - smoothstep(0.0, 1.0, distFromLeft);
 
-          // Add rightward velocity (positive X direction)
-          vec2 flowForce = vec2(flowVelocity * strength, 0.0);
+          // Target velocity at the inflow boundary
+          vec2 targetVelocity = vec2(flowVelocity, 0.0);
 
-          gl_FragColor = currentVelocity + vec4(flowForce, 0.0, 0.0);
+          // Blend between current velocity and target inflow velocity
+          vec2 resultVelocity = mix(currentVelocity.xy, targetVelocity, blend);
+
+          gl_FragColor = vec4(resultVelocity, currentVelocity.zw);
         }`,
       depthTest: false,
       depthWrite: false
