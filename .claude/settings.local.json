@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(NODE_OPTIONS=--openssl-legacy-provider npm start:*)"
+      "Bash(NODE_OPTIONS=--openssl-legacy-provider npm start:*)",
+      "Bash(npm run build:*)",
+      "Bash(NODE_OPTIONS=--openssl-legacy-provider npm run build:*)"
     ]
   }
 }

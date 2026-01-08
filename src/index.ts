@@ -7,7 +7,6 @@ import {
   TextureLoader,
   UnsignedByteType,
   Vector2,
-  Vector3,
   Vector4,
   WebGLRenderer
 } from "three";
@@ -23,8 +22,8 @@ import { TouchColorPass } from "./passes/TouchColorPass";
 import { TouchForcePass } from "./passes/TouchForcePass";
 import { VelocityInitPass } from "./passes/VelocityInitPass";
 import { MeasurementPass } from "./passes/MeasurementPass";
-import { SmokeEmitterPass } from "./passes/SmokeEmitterPass";
 import { ObstacleMaskPass } from "./passes/ObstacleMaskPass";
+import { VelocityFieldPass } from "./passes/VelocityFieldPass";
 import { RenderTarget } from "./RenderTarget";
 
 // tslint:disable:no-var-requires
@@ -83,10 +82,11 @@ const configuration = {
   Mode: "Spectral",
   SpectralMin: 400,
   SpectralMax: 650,
-  SmokeEnabled: true,
-  SmokeEmitters: 3,
-  SmokeRadius: 0.015,
-  SmokeIntensity: 0.4,
+  ParticlesEnabled: true,
+  ParticleStreams: 3,
+  ParticleStreamY: 0.5,
+  ParticleSize: 2,
+  ParticleSpawnRate: 5,
   SimulationMode: "Standard",
   Timestep: "1/60",
   Reset: () => {
@@ -218,15 +218,27 @@ const pressurePass = new JacobiIterationsPass();
 const pressureSubstractionPass = new GradientSubstractionPass();
 const compositionPass = new CompositionPass();
 
-// Smoke emitter system
-const smokeEmitterPass = new SmokeEmitterPass(resolution);
-const emitterPositions = [
-  new Vector3(0.05, 0.25, 1.0),  // x, y, enabled
-  new Vector3(0.05, 0.5, 1.0),
-  new Vector3(0.05, 0.75, 1.0),
-  new Vector3(0.05, 0.5, 0.0)   // 4th disabled by default
-];
-let smokeTime = 0;
+// Particle stream system
+interface IParticle {
+  x: number;  // normalized 0-1
+  y: number;  // normalized 0-1
+}
+const particles: IParticle[] = [];
+const MAX_PARTICLES = 500;
+const VELOCITY_GRID_WIDTH = 64;
+const VELOCITY_GRID_HEIGHT = 32;
+const PARTICLE_VELOCITY_SCALE = 10.0;
+let particleSpawnAccumulator = 0;
+
+// Velocity field readback for particle advection
+const velocityFieldRT = new RenderTarget(
+  new Vector2(VELOCITY_GRID_WIDTH, VELOCITY_GRID_HEIGHT),
+  1,
+  RGBAFormat,
+  UnsignedByteType
+);
+const velocityFieldPass = new VelocityFieldPass();
+const velocityFieldBuffer = new Uint8Array(VELOCITY_GRID_WIDTH * VELOCITY_GRID_HEIGHT * 4);
 
 // Measurement system - uses UnsignedByteType for reliable readback
 const measurementRT = new RenderTarget(new Vector2(1, 1), 1, RGBAFormat, UnsignedByteType);
@@ -460,12 +472,13 @@ function initGUI() {
   gui.add(configuration, "SpectralMin", 340, 600, 10);
   gui.add(configuration, "SpectralMax", 450, 700, 10);
 
-  // Smoke emitter controls
-  const smokeFolder = gui.addFolder("Smoke");
-  smokeFolder.add(configuration, "SmokeEnabled").name("Enabled");
-  smokeFolder.add(configuration, "SmokeEmitters", 1, 4, 1).name("Emitters");
-  smokeFolder.add(configuration, "SmokeRadius", 0.005, 0.05, 0.005).name("Radius");
-  smokeFolder.add(configuration, "SmokeIntensity", 0.1, 1.0, 0.1).name("Intensity");
+  // Particle stream controls
+  const particleFolder = gui.addFolder("Particles");
+  particleFolder.add(configuration, "ParticlesEnabled").name("Enabled");
+  particleFolder.add(configuration, "ParticleStreams", 1, 5, 1).name("Streams");
+  particleFolder.add(configuration, "ParticleStreamY", 0.1, 0.9, 0.05).name("Center Y");
+  particleFolder.add(configuration, "ParticleSize", 1, 5, 0.5).name("Size");
+  particleFolder.add(configuration, "ParticleSpawnRate", 1, 20, 1).name("Spawn Rate");
 
   // Measurement controls
   const measureFolder = gui.addFolder("Measurements");
@@ -598,15 +611,7 @@ function render() {
       renderer.render(velocityBoundary.scene, camera);
     }
 
-    // Compute the divergence of the advected velocity vector field.
-    velocityDivergencePass.update({
-      timeDelta: dt,
-      velocity: v
-    });
-    d = divergenceRT.set(renderer);
-    renderer.render(velocityDivergencePass.scene, camera);
-
-    // Render obstacle mask if using obstacle-aware mode
+    // Render obstacle mask if using obstacle-aware mode (needed before divergence)
     const useObstacleAware = configuration.SimulationMode === "Obstacle-Aware" && configuration.ChevronEnabled;
     if (useObstacleAware) {
       obstacleMaskPass.update({
@@ -624,6 +629,16 @@ function render() {
       obstacleMaskTexture = obstacleMaskRT.set(renderer);
       renderer.render(obstacleMaskPass.scene, camera);
     }
+
+    // Compute the divergence of the advected velocity vector field.
+    velocityDivergencePass.update({
+      timeDelta: dt,
+      velocity: v,
+      obstacleMask: obstacleMaskTexture,
+      useObstacleMask: useObstacleAware
+    });
+    d = divergenceRT.set(renderer);
+    renderer.render(velocityDivergencePass.scene, camera);
 
     // Compute the pressure gradient of the advected velocity vector field (using
     // jacobi iterations).
@@ -660,29 +675,9 @@ function render() {
     c = colorRT.set(renderer);
     renderer.render(colorAdvectionPass.scene, camera);
 
-    // Add smoke/dye from emitters
-    if (configuration.SmokeEnabled) {
-      smokeTime += dt;
-
-      // Update emitter enabled states based on SmokeEmitters count
-      for (let i = 0; i < 4; i++) {
-        emitterPositions[i].z = i < configuration.SmokeEmitters ? 1.0 : 0.0;
-      }
-
-      smokeEmitterPass.update({
-        colorBuffer: c,
-        aspect,
-        emitter0: emitterPositions[0],
-        emitter1: emitterPositions[1],
-        emitter2: emitterPositions[2],
-        emitter3: emitterPositions[3],
-        emitterRadius: configuration.SmokeRadius,
-        emitterIntensity: configuration.SmokeIntensity,
-        emitterColor: new Vector3(1.0, 1.0, 1.0),
-        time: smokeTime
-      });
-      c = colorRT.set(renderer);
-      renderer.render(smokeEmitterPass.scene, camera);
+    // Update particle system
+    if (configuration.ParticlesEnabled) {
+      updateParticles(dt);
     }
 
     // Feed the input of the advection passes with the last advected results.
@@ -734,10 +729,8 @@ function render() {
   // Update measurements
   updateMeasurements();
 
-  // Draw measurement overlay
-  if (measurementConfig.showOverlay) {
-    drawMeasurementOverlay();
-  }
+  // Draw overlays (measurements and particles)
+  drawOverlays();
 }
 
 // Create overlay canvas for measurements
@@ -837,11 +830,23 @@ function updateMeasurements() {
   }
 }
 
-function drawMeasurementOverlay() {
+function drawOverlays() {
   if (!overlayCtx) return;
 
-  // Clear the overlay
+  // Clear the overlay canvas
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+  // Draw particles first (so measurements appear on top)
+  drawParticles();
+
+  // Draw measurement overlay
+  if (measurementConfig.showOverlay) {
+    drawMeasurementOverlay();
+  }
+}
+
+function drawMeasurementOverlay() {
+  if (!overlayCtx) return;
 
   overlayCtx.font = "12px monospace";
   overlayCtx.textBaseline = "top";
@@ -905,6 +910,137 @@ function drawMeasurementOverlay() {
       overlayCtx.fillStyle = "#ffff00";
       overlayCtx.fillText(label, labelX, labelY);
     }
+  }
+}
+
+// Particle system functions
+function sampleVelocityField() {
+  if (!v) return;
+
+  // Render velocity to small readback texture
+  velocityFieldPass.update({
+    velocity: v,
+    valueScale: PARTICLE_VELOCITY_SCALE
+  });
+  velocityFieldRT.set(renderer);
+  renderer.render(velocityFieldPass.scene, camera);
+
+  // Read back to CPU
+  renderer.readRenderTargetPixels(
+    velocityFieldRT.previous,
+    0, 0,
+    VELOCITY_GRID_WIDTH, VELOCITY_GRID_HEIGHT,
+    velocityFieldBuffer
+  );
+}
+
+function getVelocityAt(x: number, y: number): { vx: number; vy: number } {
+  // Clamp coordinates
+  const cx = Math.max(0, Math.min(1, x));
+  const cy = Math.max(0, Math.min(1, y));
+
+  // Convert to grid coordinates
+  const gx = cx * (VELOCITY_GRID_WIDTH - 1);
+  const gy = cy * (VELOCITY_GRID_HEIGHT - 1);
+
+  // Bilinear interpolation
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const x1 = Math.min(x0 + 1, VELOCITY_GRID_WIDTH - 1);
+  const y1 = Math.min(y0 + 1, VELOCITY_GRID_HEIGHT - 1);
+  const fx = gx - x0;
+  const fy = gy - y0;
+
+  // Sample 4 corners (RGBA format, velocity in R and G)
+  const i00 = (y0 * VELOCITY_GRID_WIDTH + x0) * 4;
+  const i10 = (y0 * VELOCITY_GRID_WIDTH + x1) * 4;
+  const i01 = (y1 * VELOCITY_GRID_WIDTH + x0) * 4;
+  const i11 = (y1 * VELOCITY_GRID_WIDTH + x1) * 4;
+
+  // Decode velocity: value = (encoded/255 - 0.5) * scale
+  const decode = (val: number) => (val / 255 - 0.5) * PARTICLE_VELOCITY_SCALE;
+
+  const vx00 = decode(velocityFieldBuffer[i00]);
+  const vy00 = decode(velocityFieldBuffer[i00 + 1]);
+  const vx10 = decode(velocityFieldBuffer[i10]);
+  const vy10 = decode(velocityFieldBuffer[i10 + 1]);
+  const vx01 = decode(velocityFieldBuffer[i01]);
+  const vy01 = decode(velocityFieldBuffer[i01 + 1]);
+  const vx11 = decode(velocityFieldBuffer[i11]);
+  const vy11 = decode(velocityFieldBuffer[i11 + 1]);
+
+  // Bilinear interpolation
+  const vx = (1 - fx) * (1 - fy) * vx00 + fx * (1 - fy) * vx10 +
+             (1 - fx) * fy * vx01 + fx * fy * vx11;
+  const vy = (1 - fx) * (1 - fy) * vy00 + fx * (1 - fy) * vy10 +
+             (1 - fx) * fy * vy01 + fx * fy * vy11;
+
+  return { vx, vy };
+}
+
+function updateParticles(dt: number) {
+  // Sample velocity field once per frame
+  sampleVelocityField();
+
+  // Spawn new particles
+  particleSpawnAccumulator += dt * configuration.ParticleSpawnRate;
+  const numStreams = configuration.ParticleStreams;
+  const centerY = configuration.ParticleStreamY;
+  const streamSpacing = 0.15;
+
+  while (particleSpawnAccumulator >= 1 && particles.length < MAX_PARTICLES) {
+    particleSpawnAccumulator -= 1;
+
+    // Spawn one particle per stream
+    for (let i = 0; i < numStreams; i++) {
+      if (particles.length >= MAX_PARTICLES) break;
+
+      // Calculate Y position for this stream (centered around ParticleStreamY)
+      const streamOffset = (i - (numStreams - 1) / 2) * streamSpacing;
+      const spawnY = centerY + streamOffset;
+
+      // Clamp to valid range
+      if (spawnY >= 0.05 && spawnY <= 0.95) {
+        particles.push({
+          x: 0.02,  // Spawn just inside left edge
+          y: spawnY
+        });
+      }
+    }
+  }
+
+  // Advect particles using velocity field
+  const advectScale = dt * 0.5;  // Scale factor for advection speed
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const particle = particles[i];
+    const vel = getVelocityAt(particle.x, particle.y);
+
+    // Update position (velocity is in normalized units per second)
+    particle.x += vel.vx * advectScale;
+    particle.y += vel.vy * advectScale;
+
+    // Remove particles that exit the domain
+    if (particle.x > 1.0 || particle.x < 0 || particle.y < 0 || particle.y > 1) {
+      particles.splice(i, 1);
+    }
+  }
+}
+
+function drawParticles() {
+  if (!overlayCtx || !configuration.ParticlesEnabled) return;
+
+  const size = configuration.ParticleSize;
+
+  overlayCtx.fillStyle = "rgba(255, 255, 255, 0.9)";
+
+  for (const particle of particles) {
+    // Convert normalized coords to screen coords
+    const screenX = particle.x * overlayCanvas.width;
+    const screenY = (1 - particle.y) * overlayCanvas.height;
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(screenX, screenY, size, 0, Math.PI * 2);
+    overlayCtx.fill();
   }
 }
 

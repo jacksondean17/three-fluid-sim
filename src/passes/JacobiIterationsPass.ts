@@ -60,7 +60,14 @@ export class JacobiIterationsPass {
               float centerMask = texture2D(obstacleMask, vUV).r;
 
               if (useObstacleMask && centerMask > 0.5) {
-                // Inside obstacle: keep pressure at 0 (or could copy from previous)
+                // Inside obstacle: keep pressure at 0
+                gl_FragColor = vec4(0.0);
+                return;
+              }
+
+              // Outflow boundary condition: set pressure to 0 at right edge
+              // This provides a reference pressure and allows pressure to dissipate
+              if (useObstacleMask && vUV.x > 1.0 - texelSize.x * 1.5) {
                 gl_FragColor = vec4(0.0);
                 return;
               }
@@ -90,6 +97,15 @@ export class JacobiIterationsPass {
                 if (maskRight > 0.5) x1 = center;
                 if (maskDown > 0.5) y0 = center;
                 if (maskUp > 0.5) y1 = center;
+
+                // Domain boundary conditions (prevent wrap-around)
+                // Left edge (inflow): Neumann BC (use center value)
+                if (vUV.x < texelSize.x * 1.5) x0 = center;
+                // Right edge (outflow): pressure = 0
+                if (vUV.x > 1.0 - texelSize.x * 1.5) x1 = vec4(0.0);
+                // Top/bottom: Neumann BC
+                if (vUV.y < texelSize.y * 1.5) y0 = center;
+                if (vUV.y > 1.0 - texelSize.y * 1.5) y1 = center;
               }
 
               vec4 d = texture2D(divergence, vUV);

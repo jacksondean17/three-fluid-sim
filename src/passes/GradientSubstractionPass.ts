@@ -86,6 +86,15 @@ export class GradientSubstractionPass {
                 if (maskRight > 0.5) x1 = pCenter;
                 if (maskDown > 0.5) y0 = pCenter;
                 if (maskUp > 0.5) y1 = pCenter;
+
+                // Domain boundary conditions (prevent wrap-around)
+                // Left edge (inflow): use center pressure for gradient calc
+                if (vUV.x < texelSize.x * 1.5) x0 = pCenter;
+                // Right edge (outflow): pressure = 0
+                if (vUV.x > 1.0 - texelSize.x * 1.5) x1 = 0.0;
+                // Top/bottom: use center pressure
+                if (vUV.y < texelSize.y * 1.5) y0 = pCenter;
+                if (vUV.y > 1.0 - texelSize.y * 1.5) y1 = pCenter;
               }
 
               vec2 v = texture2D(velocity, vUV).xy;
